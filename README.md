@@ -21,7 +21,7 @@ This repository contains the complete workflow for analyzing Swiggy restaurant d
 
 ```text
 ├── Cleaned Swiggy Data.csv       # Processed dataset ready for analysis & SQL import
-├── SWIGGYANALYSISJUPYTER.ipynb  # Jupyter Notebook with data cleaning, EDA, and charts
+├── SWIGGYANALYSISJUPYTER.ipynb   # Jupyter Notebook with data cleaning, EDA, and charts
 ├── SQL Script Swiggy Data.sql    # Advanced SQL script (CTEs, Window Functions, Grouping)
-├── swiggydashboard.html         # Interactive web analytics dashboard
-└── README.md                    # Project documentation
+├── swiggydashboard.html          # Web analytics dashboard
+└── README.md                     # Project documentation
