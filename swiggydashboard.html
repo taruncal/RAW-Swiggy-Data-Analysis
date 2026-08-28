@@ -1,0 +1,692 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+  ArcElement,
+  PointElement,
+} from 'chart.js';
+import { Bar, Doughnut, Scatter } from 'react-chartjs-2';
+import {
+  Store,
+  Star,
+  Wallet,
+  Clock,
+  TrendingUp,
+  MapPin,
+  Utensils,
+  Map,} from 'lucide-react';
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+  ArcElement,
+  PointElement
+);
+
+const GOOGLE_SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgXsNhiiIek4Kx8eqj5Hs1fdW8StU-41g0zcJ_Wal2vI3B0YfBOxpcC2ZreECdGgYArbiuMfXKiMTH/pub?output=csv';
+
+const parseCSV = (text) => {
+  const lines = [];
+  let currentLine = [];
+  let currentField = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+    
+    if (inQuotes) {
+      if (char === '"' && nextChar === '"') {
+        currentField += '"';
+        i++; 
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        currentField += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === ',') {
+        currentLine.push(currentField);
+        currentField = '';
+      } else if (char === '\n' || (char === '\r' && nextChar === '\n')) {
+        if (char === '\r') i++; 
+        currentLine.push(currentField);
+        lines.push(currentLine);
+        currentLine = [];
+        currentField = '';
+      } else {
+        currentField += char;
+      }
+    }
+  }
+  
+  if (currentField || currentLine.length > 0) {
+    currentLine.push(currentField);
+    lines.push(currentLine);
+  }
+  
+  if (lines.length < 2) return [];
+  
+  const headers = lines[0].map(h => h.trim());
+  const data = [];
+  
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.length === 1 && line[0].trim() === '') continue; 
+    const obj = {};
+    for (let j = 0; j < headers.length; j++) {
+      obj[headers[j]] = line[j];
+    }
+    data.push(obj);
+  }
+  
+  return data;
+};
+
+const SwiggyDashboard = () => {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch(GOOGLE_SHEET_CSV_URL);
+        if (!response.ok) {
+           throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const csvText = await response.text();
+        const parsedData = parseCSV(csvText);
+
+        const cleanedData = parsedData.map(row => {
+               // Make finding columns more resilient by checking lowercased keys without spaces
+               const findKey = (keywords) => {
+                   const normalizedKeys = Object.keys(row).map(k => k.toLowerCase().replace(/[^a-z]/g, ''));
+                   const originalKeys = Object.keys(row);
+                   
+                   for (let i = 0; i < normalizedKeys.length; i++) {
+                       if (keywords.some(kw => normalizedKeys[i].includes(kw.replace(/[^a-z]/g, '')))) {
+                           return originalKeys[i];
+                       }
+                   }
+                   return null;
+               };
+               
+               // Look for cost, price, or similar terms
+               const costKey = findKey(['cost', 'price', 'avgspend']);
+               let costStr = costKey ? String(row[costKey]) : '';
+               // More robust number extraction: handle ₹, commas, and trailing text
+               // Match the first sequence of numbers, optional commas, optional decimals
+               const costMatch = costStr.match(/[\d,]+(?:\.\d+)?/);
+               let cost = 0;
+               if (costMatch) {
+                   // Remove commas before parsing
+                   cost = parseFloat(costMatch[0].replace(/,/g, ''));
+               }
+               if (isNaN(cost)) cost = 0;
+               
+               const ratingKey = findKey(['rating', 'score']);
+               const ratingStr = ratingKey ? String(row[ratingKey]) : '';
+               const ratingMatch = ratingStr.match(/[\d.]+/);
+               let rating = ratingMatch ? parseFloat(ratingMatch[0]) : 0;
+               if (isNaN(rating)) rating = 0;
+               
+               const timeKey = findKey(['time', 'delivery', 'mins']);
+               const deliveryTimeStr = timeKey ? String(row[timeKey]) : '';
+               const timeMatch = deliveryTimeStr.match(/\d+/);
+               let delivery_time = timeMatch ? parseInt(timeMatch[0], 10) : null;
+               if (isNaN(delivery_time)) delivery_time = null;
+
+               const cityKey = findKey(['area', 'city', 'location']);
+               const city = (cityKey && row[cityKey]) ? row[cityKey].trim() : 'Unknown';
+
+               const cuisineKey = findKey(['cuisine', 'food', 'category']);
+               const cuisine = (cuisineKey && row[cuisineKey]) ? row[cuisineKey].trim() : 'Unknown';
+
+               const nameKey = findKey(['name', 'restaurant', 'outlet']);
+               const name = (nameKey && row[nameKey]) ? row[nameKey].trim() : 'Unknown Restaurant';
+
+              return {
+                ...row,
+                cleanCost: cost,
+                cleanRating: rating,
+                cleanDeliveryTime: delivery_time,
+                cleanCity: city,
+                cleanCuisine: cuisine,
+                name: name
+              };
+            });
+            
+        setData(cleanedData);
+        setLoading(false);
+      } catch (err) {
+        setError(err.message);
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
+  const metrics = useMemo(() => {
+    if (!data.length) return { totalCount: 0, avgRating: 0, avgPrice: 0, fastestDelivery: 0, totalCities: 0 };
+    let totalRating = 0;
+    let ratingCount = 0;
+    let totalPrice = 0;
+    let priceCount = 0;
+    let fastest = Infinity;
+    const uniqueCities = new Set();
+    data.forEach(item => {
+      if (item.cleanRating > 0) {
+        totalRating += item.cleanRating;
+        ratingCount++;
+      }
+      if (item.cleanCost > 0) {
+        totalPrice += item.cleanCost;
+        priceCount++;
+      }
+      if (item.cleanDeliveryTime && item.cleanDeliveryTime > 0 && item.cleanDeliveryTime < fastest) {
+        fastest = item.cleanDeliveryTime;
+      }
+      if (item.cleanCity && item.cleanCity !== 'Unknown') {
+        uniqueCities.add(item.cleanCity);
+      }
+    });
+
+    // Calculate most popular city based on listing count
+    const cityCounts = {};
+    data.forEach(item => {
+        if (item.cleanCity && item.cleanCity !== 'Unknown') {
+            cityCounts[item.cleanCity] = (cityCounts[item.cleanCity] || 0) + 1;
+        }
+    });
+    let mostPopular = 'N/A';
+    let maxCount = 0;
+    Object.entries(cityCounts).forEach(([city, count]) => {
+        if (count > maxCount) {
+            maxCount = count;
+            mostPopular = city;
+        }
+    });
+
+
+    return {
+      totalCount: data.length,
+      avgRating: ratingCount > 0 ? (totalRating / ratingCount).toFixed(1) : 'N/A',
+      avgPrice: priceCount > 0 ? Math.round(totalPrice / priceCount) : 'N/A',
+      fastestDelivery: fastest !== Infinity ? fastest : 'N/A',
+      totalCities: uniqueCities.size,
+      mostPopularCity: mostPopular
+    };
+  }, [data]);
+
+  const cuisinePriceData = useMemo(() => {
+    const cuisineStats = {};
+    data.forEach(item => {
+        // Simple split for multi-cuisine strings
+        const cuisines = item.cleanCuisine.split(',').map(c => c.trim());
+        cuisines.forEach(c => {
+             if (!cuisineStats[c]) cuisineStats[c] = { total: 0, count: 0 };
+             if (item.cleanCost > 0) {
+                cuisineStats[c].total += item.cleanCost;
+                cuisineStats[c].count++;
+             }
+        })
+    });
+
+    // Get top 10 most popular cuisines by count to avoid cluttered chart
+    const topCuisines = Object.entries(cuisineStats)
+      .filter(([_, stats]) => stats.count > 5) // filter out rare ones
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 10);
+
+    return {
+      labels: topCuisines.map(c => c[0]),
+      datasets: [
+        {
+          label: 'Average Price (₹)',
+          data: topCuisines.map(c => Math.round(c[1].total / c[1].count)),
+          backgroundColor: '#fc8019', // Swiggy orange
+          borderRadius: 4,
+        },
+      ],
+    };
+  }, [data]);
+
+  const deliverySpeedData = useMemo(() => {
+    let fast = 0, moderate = 0, slow = 0;
+    data.forEach(item => {
+      const time = item.cleanDeliveryTime;
+      if (time) {
+        if (time < 30) fast++;
+        else if (time >= 30 && time <= 45) moderate++;
+        else slow++;
+      }
+    });
+
+    return {
+      labels: ['Fast (<30 mins)', 'Moderate (30-45 mins)', 'Slow (>45 mins)'],
+      datasets: [
+        {
+          data: [fast, moderate, slow],
+          backgroundColor: ['#22c55e', '#f59e0b', '#ef4444'],
+          hoverOffset: 4,
+          borderWidth: 0
+        },
+      ],
+    };
+  }, [data]);
+
+  const cityDensityData = useMemo(() => {
+    const cityCounts = {};
+    data.forEach(item => {
+      const city = item.cleanCity;
+      cityCounts[city] = (cityCounts[city] || 0) + 1;
+    });
+
+    const sortedCities = Object.entries(cityCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+
+    return {
+      labels: sortedCities.map(c => c[0]),
+      datasets: [
+        {
+          label: 'Number of Outlets',
+          data: sortedCities.map(c => c[1]),
+          backgroundColor: '#60a5fa',
+          borderRadius: 4,
+        },
+      ],
+    };
+  }, [data]);
+
+  const ratingByPriceTierData = useMemo(() => {
+    const tiers = {
+      'Under ₹200': { totalRating: 0, count: 0 },
+      '₹200-₹400': { totalRating: 0, count: 0 },
+      '₹400-₹600': { totalRating: 0, count: 0 },
+      '₹600-₹1000': { totalRating: 0, count: 0 },
+      'Over ₹1000': { totalRating: 0, count: 0 }
+    };
+
+    data.forEach(item => {
+      const cost = item.cleanCost;
+      const rating = item.cleanRating;
+
+      if (cost > 0 && rating > 0) {
+        if (cost < 200) { tiers['Under ₹200'].totalRating += rating; tiers['Under ₹200'].count++; }
+        else if (cost >= 200 && cost < 400) { tiers['₹200-₹400'].totalRating += rating; tiers['₹200-₹400'].count++; }
+        else if (cost >= 400 && cost < 600) { tiers['₹400-₹600'].totalRating += rating; tiers['₹400-₹600'].count++; }
+        else if (cost >= 600 && cost < 1000) { tiers['₹600-₹1000'].totalRating += rating; tiers['₹600-₹1000'].count++; }
+        else { tiers['Over ₹1000'].totalRating += rating; tiers['Over ₹1000'].count++; }
+      }
+    });
+
+    const labels = Object.keys(tiers);
+    const avgRatings = labels.map(tier => 
+      tiers[tier].count > 0 ? (tiers[tier].totalRating / tiers[tier].count).toFixed(2) : 0
+    );
+
+    return {
+      labels,
+      datasets: [
+        {
+          label: 'Average Rating',
+          data: avgRatings,
+          backgroundColor: '#8b5cf6', // A distinct purple color
+          borderRadius: 4,
+        },
+      ],
+    };
+  }, [data]);
+
+  const insights = useMemo(() => {
+    if (!data.length) return { expensivePerCity: [], topRatedCuisine: [], fastestCity: [], popularOverallCuisines: [] };
+
+    // 1. Most Expensive per Area (Matches SQL: RANK() OVER (PARTITION BY area ORDER BY price_for_two DESC))
+    const cityRestaurants = {};
+    data.forEach(d => {
+        if(!cityRestaurants[d.cleanCity]) cityRestaurants[d.cleanCity] = [];
+        cityRestaurants[d.cleanCity].push(d);
+    });
+    
+    const expensivePerCity = [];
+    Object.keys(cityRestaurants).forEach(city => {
+        const validCostRestaurants = cityRestaurants[city].filter(d => d.cleanCost > 0);
+        const sorted = validCostRestaurants.sort((a, b) => b.cleanCost - a.cleanCost);
+        // Taking the single most expensive per area (rn = 1)
+        if (sorted.length > 0) {
+            expensivePerCity.push(sorted[0]);
+        }
+    });
+    
+    // Sort entire result set descending by cost to match the SQL output view
+    const displayExpensive = expensivePerCity
+        .sort((a, b) => b.cleanCost - a.cleanCost)
+        .slice(0, 10); // Limit to top 10 overall for UI purposes
+
+    // 2. Top-Rated per Cuisine
+    const cuisineMap = {};
+    data.forEach(d => {
+        if (d.cleanRating > 0) {
+            const cuisines = d.cleanCuisine.split(',').map(c => c.trim());
+            cuisines.forEach(c => {
+                if (!c) return;
+                if (!cuisineMap[c]) cuisineMap[c] = [];
+                cuisineMap[c].push(d);
+            });
+        }
+    });
+    const topRatedCuisine = [];
+    const popularCuisinesForRating = Object.entries(cuisineMap)
+        .sort((a, b) => b[1].length - a[1].length)
+        .slice(0, 7)
+        .map(entry => entry[0]);
+
+    popularCuisinesForRating.forEach(c => {
+        const sorted = cuisineMap[c].sort((a, b) => b.cleanRating - a.cleanRating);
+        if (sorted.length > 0) {
+            topRatedCuisine.push({
+                assignedCuisine: c,
+                name: sorted[0].name,
+                cleanRating: sorted[0].cleanRating
+            });
+        }
+    });
+
+    // 3. Fastest Delivery Outlets per Top City
+    const fastestCity = [];
+    
+    // First, identify top cities by count to avoid tiny random areas
+    const cityCountsForFastest = {};
+    data.forEach(d => {
+        if(d.cleanCity) {
+            cityCountsForFastest[d.cleanCity] = (cityCountsForFastest[d.cleanCity] || 0) + 1;
+        }
+    });
+    
+    const topCities = Object.entries(cityCountsForFastest)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5) // Top 5 major cities
+        .map(entry => entry[0]);
+
+    topCities.forEach(city => {
+        const validTimeRestaurants = (cityRestaurants[city] || []).filter(d => d.cleanDeliveryTime > 0);
+        const sorted = validTimeRestaurants.sort((a, b) => a.cleanDeliveryTime - b.cleanDeliveryTime);
+        if (sorted.length > 0) {
+            fastestCity.push(sorted[0]);
+        }
+    });
+
+    // 4. Most Popular Cuisines Overall
+    const cuisineCounts = {};
+    data.forEach(d => {
+        const cuisines = d.cleanCuisine.split(',').map(c => c.trim());
+        cuisines.forEach(c => {
+             if(c) cuisineCounts[c] = (cuisineCounts[c] || 0) + 1;
+        });
+    });
+    
+    const popularOverallCuisines = Object.entries(cuisineCounts)
+        .sort((a,b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([name, count]) => ({name, count}));
+
+    return { 
+        expensivePerCity: displayExpensive, 
+        topRatedCuisine, 
+        fastestCity,
+        popularOverallCuisines
+    };
+  }, [data]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="flex flex-col items-center">
+            <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+            <p className="mt-4 text-slate-600 font-medium">Loading dataset...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-red-50 p-4 rounded-lg border border-red-200 text-red-700 max-w-md text-center">
+            <h2 className="font-bold text-lg mb-2">Error Loading Data</h2>
+            <p>{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-6 lg:p-8" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+      <style>
+        {`@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');`}
+      </style>
+
+      {/* Header */}
+      <header className="mb-8 flex items-center justify-between">
+        <div>
+            <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 flex flex-wrap items-center gap-3 tracking-tight">
+                <img 
+                  src="https://w7.pngwing.com/pngs/55/100/png-transparent-swiggy-hd-logo-thumbnail.png" 
+                  alt="Swiggy Logo" 
+                  className="h-8 md:h-10 w-auto object-contain shrink-0"
+                />
+                <span className="border-l-2 border-slate-300 pl-3 text-slate-700">Swiggy Dashboard</span>
+            </h1>
+            <p className="text-slate-500 mt-2 font-medium text-sm md:text-base">Data-driven insights from restaurant listings</p>
+        </div>
+      </header>
+
+      {}
+      <div className="flex flex-wrap gap-4 mb-8">
+        <div className="flex-1 min-w-[250px]">
+          <KPICard title="Total Restaurants" value={metrics.totalCount.toLocaleString()} icon={<Store size={24} />} color="blue" />
+        </div>
+        <div className="flex-1 min-w-[250px]">
+          <KPICard title="Total Areas Listed" value={metrics.totalCities.toLocaleString()} icon={<Map size={24} />} color="indigo" />
+        </div>
+        <div className="flex-1 min-w-[250px]">
+          <KPICard title="Average Rating" value={`${metrics.avgRating} / 5.0`} icon={<Star size={24} />} color="orange" />
+        </div>
+        <div className="flex-1 min-w-[250px]">
+          <KPICard title="Avg Cost for Two" value={`₹${metrics.avgPrice}`} icon={<Wallet size={24} />} color="emerald" />
+        </div>
+        <div className="flex-1 min-w-[250px]">
+          <KPICard title="Fastest Delivery" value={`${metrics.fastestDelivery} mins`} icon={<Clock size={24} />} color="purple" />
+        </div>
+        <div className="flex-1 min-w-[250px]">
+          <KPICard title="Most Popular City" value={metrics.mostPopularCity} icon={<MapPin size={24} />} color="red" />
+        </div>
+      </div>
+
+      {/* Charts Section 1 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {}
+        <ChartCard title="Average Price by Cuisine (Top 10)" icon={<Utensils size={20}/>}>
+           <div className="h-64">
+            <Bar 
+              data={cuisinePriceData} 
+              options={{ maintainAspectRatio: false, plugins: { legend: { display: false } } }} 
+            />
+          </div>
+        </ChartCard>
+        
+        <ChartCard title="Delivery Speed Distribution" icon={<Clock size={20}/>}>
+          <div className="h-64 flex justify-center">
+            <Doughnut 
+              data={deliverySpeedData} 
+              options={{ maintainAspectRatio: false, cutout: '70%' }} 
+            />
+          </div>
+        </ChartCard>
+      </div>
+
+      {/* Charts Section 2 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+         <ChartCard title="City-wise Outlet Density" icon={<MapPin size={20}/>}>
+           <div className="h-64">
+            <Bar 
+              data={cityDensityData} 
+              options={{ indexAxis: 'y', maintainAspectRatio: false, plugins: { legend: { display: false } } }} 
+            />
+          </div>
+        </ChartCard>
+
+        <ChartCard title="Average Rating by Price Tier" icon={<TrendingUp size={20}/>}>
+           <div className="h-64">
+            <Bar 
+              data={ratingByPriceTierData} 
+              options={{ 
+                  maintainAspectRatio: false,
+                  plugins: { legend: { display: false } },
+                  scales: {
+                      y: { 
+                          title: { display: true, text: 'Average Rating' }, 
+                          min: 3, // Set min to 3 as most ratings are above this, makes differences clearer
+                          max: 5 
+                      }
+                  }
+              }} 
+            />
+          </div>
+        </ChartCard>
+      </div>
+
+      {/* Advanced Insights Tables */}
+      <div className="space-y-8">
+          <h2 className="text-2xl font-extrabold text-slate-900 border-b border-slate-200 pb-3 tracking-tight">Advanced Insights</h2>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Top Expensive */}
+              <TableCard title="Most Expensive spots per Area" columns={['Area', 'Restaurant', 'Price per Two (₹)']}>
+                  {insights.expensivePerCity.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-3 px-6 font-semibold text-slate-700">{item.cleanCity}</td>
+                          <td className="py-3 px-6 font-medium text-slate-600">{item.name}</td>
+                          <td className="py-3 px-6 text-right font-extrabold text-emerald-600">₹{item.cleanCost}</td>
+                      </tr>
+                  ))}
+              </TableCard>
+
+              {/* Top Rated by Cuisine */}
+               <TableCard title="Top-Rated Restaurants per Cuisine" columns={['Cuisine', 'Restaurant', 'Rating']}>
+                  {insights.topRatedCuisine.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-3 px-6 font-semibold text-slate-700 capitalize">{item.assignedCuisine}</td>
+                          <td className="py-3 px-6 font-medium text-slate-600">{item.name}</td>
+                          <td className="py-3 px-6 text-right">
+                              <span className="inline-flex items-center gap-1 bg-green-100 text-green-800 px-2 py-1 rounded-md text-xs font-extrabold">
+                                  {item.cleanRating} <Star size={12} fill="currentColor" className="text-green-700"/>
+                              </span>
+                          </td>
+                      </tr>
+                  ))}
+              </TableCard>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+             <TableCard title="Fastest Delivery Outlets in Major Cities" columns={['City', 'Restaurant', 'Delivery Time']}>
+                  {insights.fastestCity.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-4 px-6 font-semibold text-slate-700">{item.cleanCity}</td>
+                          <td className="py-4 px-6 font-medium text-slate-600">{item.name}</td>
+                          <td className="py-4 px-6 text-right font-extrabold text-purple-600">{item.cleanDeliveryTime} mins</td>
+                      </tr>
+                  ))}
+              </TableCard>
+
+               {/* Most Popular Cuisines */}
+               <TableCard title="Top 10 Most Popular Cuisines Overall" columns={['Cuisine', 'Total Restaurants Listed']}>
+                  {insights.popularOverallCuisines.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-4 px-6 font-semibold text-slate-700 capitalize">
+                              <span className="flex items-center gap-2">
+                                  <span className="text-slate-400 text-xs">{idx + 1}.</span> {item.name}
+                              </span>
+                          </td>
+                          <td className="py-4 px-6 text-right font-extrabold text-orange-600">
+                             {item.count.toLocaleString()}
+                          </td>
+                      </tr>
+                  ))}
+              </TableCard>
+          </div>
+      </div>
+    </div>
+  );
+};
+
+const KPICard = ({ title, value, icon, color }) => {
+    const colorClasses = {
+        blue: "bg-blue-50 text-blue-600 border-blue-100",
+        indigo: "bg-indigo-50 text-indigo-600 border-indigo-100",
+        orange: "bg-orange-50 text-[#fc8019] border-orange-100",
+        emerald: "bg-emerald-50 text-emerald-600 border-emerald-100",
+        purple: "bg-purple-50 text-purple-600 border-purple-100",
+        red: "bg-red-50 text-red-600 border-red-100"
+    };
+
+    return (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex items-center gap-5 transition-all hover:shadow-md hover:-translate-y-1">
+            <div className={`p-4 rounded-xl border ${colorClasses[color]}`}>
+                {icon}
+            </div>
+            <div>
+                <p className="text-xs text-slate-500 font-bold mb-1 uppercase tracking-widest">{title}</p>
+                <h3 className="text-3xl font-extrabold text-slate-900 tracking-tight">{value}</h3>
+            </div>
+        </div>
+    );
+};
+
+const ChartCard = ({ title, icon, children }) => (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 lg:p-8">
+        <h3 className="text-lg font-extrabold text-slate-800 mb-6 flex items-center gap-2 tracking-tight">
+            <span className="text-slate-400">{icon}</span> {title}
+        </h3>
+        {children}
+    </div>
+);
+
+const TableCard = ({ title, columns, children }) => (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="bg-white px-6 py-5 border-b border-slate-100">
+            <h3 className="text-base font-extrabold text-slate-800 tracking-tight">{title}</h3>
+        </div>
+        <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+                <thead className="text-xs text-slate-400 uppercase bg-slate-50/50 border-b border-slate-100 tracking-widest font-extrabold">
+                    <tr>
+                        {columns.map((col, i) => (
+                            <th key={i} className={`py-4 px-6 ${i === columns.length - 1 ? 'text-right' : ''}`}>{col}</th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                    {children}
+                </tbody>
+            </table>
+        </div>
+    </div>
+);
+
+export default SwiggyDashboard;
